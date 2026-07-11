@@ -1,0 +1,82 @@
+# Example configuration for the Texecom Premier component.
+# See README.md for wiring and setup. Copy secrets.yaml.example to secrets.yaml.
+
+substitutions:
+  name: texecom-alarm
+  friendly_name: Texecom Premier
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  baud_rate: 115200
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# Pull the component from GitHub. For local development use instead:
+#   - source: {type: local, path: components}
+#     components: [texecom]
+external_components:
+  - source: github://GoosieZA/esphome-texecom
+    components: [texecom]
+
+# Panel COM1 (set to "PC Com") through a level shifter. 19200 8N2.
+uart:
+  id: texecom_uart
+  tx_pin: GPIO25
+  rx_pin: GPIO26
+  baud_rate: 19200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 2
+
+texecom:
+  id: panel
+  uart_id: texecom_uart
+  udl: !secret texecom_udl_passcode  # panel UDL passcode, plain digits
+
+# Arm/disarm + state as a Home Assistant alarm panel.
+alarm_control_panel:
+  - platform: texecom
+    texecom_id: panel
+    name: "Alarm"
+    area: 1
+
+binary_sensor:
+  # One entry per zone. `zone` is the panel zone number.
+  - platform: texecom
+    texecom_id: panel
+    zone: 1
+    name: "Front Door"
+    device_class: door
+  - platform: texecom
+    texecom_id: panel
+    zone: 2
+    name: "Hallway"
+    device_class: motion
+  - platform: texecom
+    texecom_id: panel
+    zone: 3
+    name: "Lounge"
+    device_class: motion
+  - platform: texecom
+    texecom_id: panel
+    zone: 4
+    name: "Kitchen"
+    device_class: motion
