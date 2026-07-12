@@ -44,6 +44,7 @@ void TexecomComponent::loop() {
     case State::LOGGED_IN:
       if (this->poll_ == Poll::IDLE && this->have_action_) {
         // arm/disarm takes priority over the status poll
+        ESP_LOGD(TAG, "Sending action cmd=0x%02X area=%u", this->action_command_, this->action_area_);
         this->send_command_(this->action_command_, {this->action_area_});
         this->poll_ = Poll::ACTION;
       } else if (this->poll_ == Poll::IDLE && now - this->last_poll_ >= this->poll_interval_) {
@@ -104,21 +105,42 @@ void TexecomComponent::process_packet_(const std::vector<uint8_t> &pkt) {
       this->poll_ = Poll::IDLE;
       this->last_poll_ = 0;  // poll immediately
       break;
-    case State::LOGGED_IN:
-      if (this->poll_ == Poll::ZONES) {
-        this->handle_zone_data_(pkt);
-        this->poll_ = Poll::SEND_ARM;
-      } else if (this->poll_ == Poll::ARM) {
-        this->handle_arm_data_(pkt);
-        this->poll_ = Poll::IDLE;
-        this->last_poll_ = millis();
-      } else if (this->poll_ == Poll::ACTION) {
+    case State::LOGGED_IN: {
+      if (this->poll_ == Poll::ACTION) {
         // arm/disarm command was acknowledged; re-poll immediately to reflect it
+        ESP_LOGV(TAG, "Action reply: %s", to_hex_(pkt).c_str());
         this->have_action_ = false;
         this->poll_ = Poll::IDLE;
         this->last_poll_ = 0;
+        break;
+      }
+      // Dispatch strictly by the address the panel echoes back, not by poll
+      // order. Zone and arm reads share the same command/response bytes, so a
+      // mis-paired reply would otherwise be read as the wrong thing - a zone's
+      // 0x00 "secure" byte landing in the arm slot reads as "armed", which is
+      // what made the panel flap armed<->disarmed on every poll.
+      const bool usable = pkt.size() >= 7 && pkt[1] != CMD_NAK;
+      const uint32_t addr = ((uint32_t) pkt[2] << 16) | ((uint32_t) pkt[3] << 8) | pkt[4];
+      if (usable && addr == this->zone_status_address_) {
+        this->handle_zone_data_(pkt);
+        this->poll_ = Poll::SEND_ARM;
+      } else if (usable && addr == this->arm_state_address_) {
+        this->handle_arm_data_(pkt);
+        this->poll_ = Poll::IDLE;
+        this->last_poll_ = millis();
+      } else {
+        // Unexpected, NAK or unsolicited frame: publish nothing, but keep the
+        // poll cycle moving so we never wedge waiting on a reply that matched.
+        ESP_LOGD(TAG, "Ignoring reply @0x%06X (poll=%d)", addr, (int) this->poll_);
+        if (this->poll_ == Poll::ZONES) {
+          this->poll_ = Poll::SEND_ARM;
+        } else if (this->poll_ == Poll::ARM) {
+          this->poll_ = Poll::IDLE;
+          this->last_poll_ = millis();
+        }
       }
       break;
+    }
     default:
       break;
   }
@@ -140,7 +162,13 @@ void TexecomComponent::handle_zone_data_(const std::vector<uint8_t> &pkt) {
 void TexecomComponent::handle_arm_data_(const std::vector<uint8_t> &pkt) {
   if (pkt.size() < 7 || pkt[1] == CMD_NAK)
     return;
-  bool armed = pkt[6] != this->disarmed_value_;
+  // The panel toggles bit 7 of this byte as a ~1 Hz poll heartbeat (observed
+  // flipping 0xE0<->0x60 while disarmed). The real arm state is in the lower
+  // bits, so mask the heartbeat off - comparing the raw byte made the panel
+  // flap armed<->disarmed every second.
+  const uint8_t masked = pkt[6] & 0x7F;
+  bool armed = masked != (this->disarmed_value_ & 0x7F);
+  ESP_LOGV(TAG, "Arm byte=0x%02X (masked 0x%02X) -> %s", pkt[6], masked, armed ? "armed" : "disarmed");
   if (this->armed_sensor_ != nullptr)
     this->armed_sensor_->publish_state(armed);
   if (this->alarm_panel_ != nullptr)
@@ -159,9 +187,11 @@ void TexecomAlarmPanel::control(const alarm_control_panel::AlarmControlPanelCall
     return;
   switch (*call.get_state()) {
     case alarm_control_panel::ACP_STATE_ARMED_AWAY:
+      ESP_LOGI(TAG, "Arming area %u (away)", this->area_);
       this->parent_->arm_area(this->area_);
       break;
     case alarm_control_panel::ACP_STATE_DISARMED:
+      ESP_LOGI(TAG, "Disarming area %u", this->area_);
       this->parent_->disarm_area(this->area_);
       break;
     default:

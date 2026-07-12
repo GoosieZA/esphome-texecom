@@ -81,10 +81,15 @@ command byte is not the `0x0F` NAK.
 |-------|---------|------|----------|
 | config | `0x000000` | 16 bytes/zone | Zone **names** (zone 1 at `0x0000`, zone 2 at `0x0010`, …) |
 | volatile | `0x0004F8` | 1 byte/zone | Live **zone status**: `0x00` secure, `0x01` active/open |
-| volatile | `0x0000E4` | 1 byte | **Arm state**: `0xE0` disarmed, `0x40` armed |
+| volatile | `0x0000E4` | 1 byte | **Arm state** (see heartbeat note): `0xE0`/`0x60` disarmed, `0x40` armed |
 
 The arm-state byte is **status only** — writing it does nothing. Use the arm/
 disarm commands below.
+
+**Bit 7 is a ~1 Hz heartbeat, not a state bit.** While disarmed the byte alternates
+`0xE0` ⇄ `0x60` every poll (only bit 7 toggles); while armed it reads `0x40`. Compare
+the byte with bit 7 masked off (`byte & 0x7F`: `0x60` = disarmed, `0x40` = armed) —
+an exact `== 0xE0` test makes the state flap disarmed↔armed once per second.
 
 ## Arm / disarm
 
@@ -133,4 +138,12 @@ disturb the panel.
 - **Avoid GPIO16/17 on WROVER ESP32 modules** — they're wired to PSRAM and
   self-echo the UART. GPIO25/26 are safe.
 - The panel ACKs almost any well-formed frame with `0x06`, so an ACK does **not**
-  mean the command did anything. Verify by reading state back.
+  mean the command did anything. Verify by reading state back. (Arm/disarm both
+  ACK identically; watch `0x0000E4` to confirm the arm actually took — and note
+  the panel won't arm while a zone is unsealed or a previous alarm is latched, so
+  a clean/ready panel is required.)
+- **The arm-state byte's bit 7 is a heartbeat.** Mask it off (`& 0x7F`) before
+  comparing, or the reported state flaps disarmed↔armed every poll. Reads should
+  also be matched to the address the panel echoes back, not just to poll order —
+  zone and arm reads share the same reply command byte, so a mis-paired reply can
+  otherwise be decoded as the wrong field.

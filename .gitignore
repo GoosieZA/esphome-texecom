@@ -3,6 +3,8 @@
 # You can modify this file to suit your needs.
 /.esphome/
 /secrets.yaml
+# personal deployment config (kept out of the public repo)
+/alarm.yaml
 
 # Python bytecode from ESPHome codegen
 __pycache__/
