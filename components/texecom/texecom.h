@@ -34,6 +34,7 @@ class TexecomComponent : public Component, public uart::UARTDevice {
 
   void register_zone(TexecomZone *zone) { this->zones_.push_back(zone); }
   void set_armed_sensor(binary_sensor::BinarySensor *s) { this->armed_sensor_ = s; }
+  void set_ready_sensor(binary_sensor::BinarySensor *s) { this->ready_sensor_ = s; }
   void set_alarm_panel(TexecomAlarmPanel *p) { this->alarm_panel_ = p; }
 
   // Called by the alarm_control_panel platform.
@@ -57,6 +58,7 @@ class TexecomComponent : public Component, public uart::UARTDevice {
 
   std::vector<TexecomZone *> zones_;
   binary_sensor::BinarySensor *armed_sensor_{nullptr};
+  binary_sensor::BinarySensor *ready_sensor_{nullptr};
   TexecomAlarmPanel *alarm_panel_{nullptr};
 
   std::string udl_{"1234"};

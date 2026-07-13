@@ -14,7 +14,7 @@ TexecomZone = texecom_ns.class_("TexecomZone", binary_sensor.BinarySensor)
 
 def _exactly_one(config):
     if (CONF_ZONE in config) == (CONF_TYPE in config):
-        raise cv.Invalid("specify exactly one of 'zone:' or 'type: armed'")
+        raise cv.Invalid("specify exactly one of 'zone:' or 'type:' (armed / ready_to_arm)")
     return config
 
 
@@ -22,9 +22,9 @@ CONFIG_SCHEMA = cv.All(
     binary_sensor.binary_sensor_schema(TexecomZone).extend(
         {
             cv.GenerateID(CONF_TEXECOM_ID): cv.use_id(TexecomComponent),
-            # a panel zone number, OR the system arm state
+            # a panel zone number, OR a system status sensor
             cv.Optional(CONF_ZONE): cv.int_range(min=1, max=240),
-            cv.Optional(CONF_TYPE): cv.one_of("armed", lower=True),
+            cv.Optional(CONF_TYPE): cv.one_of("armed", "ready_to_arm", lower=True),
         }
     ),
     _exactly_one,
@@ -37,5 +37,7 @@ async def to_code(config):
     if CONF_ZONE in config:
         cg.add(var.set_zone_number(config[CONF_ZONE]))
         cg.add(hub.register_zone(var))
+    elif config[CONF_TYPE] == "ready_to_arm":
+        cg.add(hub.set_ready_sensor(var))
     else:
         cg.add(hub.set_armed_sensor(var))

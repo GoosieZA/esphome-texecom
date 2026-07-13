@@ -152,11 +152,21 @@ void TexecomComponent::handle_zone_data_(const std::vector<uint8_t> &pkt) {
     return;
   const uint8_t *data = &pkt[6];
   uint8_t count = (uint8_t) (pkt.size() - 7);
+  bool all_secure = true;
   for (auto *z : this->zones_) {
     uint8_t idx = z->get_zone_number() - 1;
-    if (idx < count)
-      z->publish_state(data[idx] != 0x00);  // 0x00 secure, 0x01 active
+    if (idx < count) {
+      bool active = data[idx] != 0x00;  // 0x00 secure, 0x01 active
+      z->publish_state(active);
+      if (active)
+        all_secure = false;
+    }
   }
+  // "Ready to arm" == every monitored zone secure. Not the panel's own ready
+  // flag (which also accounts for faults/latched alarms), but a good proxy that
+  // needs no extra reads.
+  if (this->ready_sensor_ != nullptr)
+    this->ready_sensor_->publish_state(all_secure);
 }
 
 void TexecomComponent::handle_arm_data_(const std::vector<uint8_t> &pkt) {
