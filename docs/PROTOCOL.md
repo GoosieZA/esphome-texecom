@@ -82,6 +82,8 @@ command byte is not the `0x0F` NAK.
 | config | `0x000000` | 16 bytes/zone | Zone **names** (zone 1 at `0x0000`, zone 2 at `0x0010`, …) |
 | volatile | `0x0004F8` | 1 byte/zone | Live **zone status**: `0x00` secure, `0x01` active/open |
 | volatile | `0x0000E4` | 1 byte | **Arm state** (see heartbeat note): `0xE0`/`0x60` disarmed, `0x40` armed |
+| volatile | `0x000558` | 1 byte | **Alarm active**: `0xFF` while triggered, `0x00` otherwise |
+| volatile | `0x0005EC` | 1 byte | bit 6 (`0x40`) = **"an alarm occurred"** memory (does *not* block arming) |
 
 The arm-state byte is **status only** — writing it does nothing. Use the arm/
 disarm commands below.
@@ -90,6 +92,16 @@ disarm commands below.
 `0xE0` ⇄ `0x60` every poll (only bit 7 toggles); while armed it reads `0x40`. Compare
 the byte with bit 7 masked off (`byte & 0x7F`: `0x60` = disarmed, `0x40` = armed) —
 an exact `== 0xE0` test makes the state flap disarmed↔armed once per second.
+
+**Triggered detection.** `0x000558` reads `0xFF` while the panel is in alarm and
+`0x00` otherwise (confirmed by correlation over two separate triggers). Report
+`triggered` as **armed AND `0x000558 == 0xFF`** — the byte lingers `0xFF` after a
+disarm (alarm memory) and only resets to `0x00` on the next arm, so gate it on the
+arm state or a stale alarm will show as triggered while re-armed. A separate
+"an alarm occurred since last arm" memory bit is `0x0005EC` bit 6 (`0x40`); it is set
+by an alarm and cleared at the keypad, but **does not block arming** — the panel
+re-arms fine with it set (the one-off "won't arm after an alarm" was an unsealed
+zone / partial reset during that incident, not this bit).
 
 ## Arm / disarm
 

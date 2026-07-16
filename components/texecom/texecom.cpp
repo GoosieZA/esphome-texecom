@@ -53,6 +53,9 @@ void TexecomComponent::loop() {
       } else if (this->poll_ == Poll::SEND_ARM) {
         this->send_read_(this->arm_state_address_, 1);
         this->poll_ = Poll::ARM;
+      } else if (this->poll_ == Poll::SEND_ALARM) {
+        this->send_read_(this->alarm_state_address_, 1);
+        this->poll_ = Poll::ALARM;
       }
       break;
     default:
@@ -126,6 +129,9 @@ void TexecomComponent::process_packet_(const std::vector<uint8_t> &pkt) {
         this->poll_ = Poll::SEND_ARM;
       } else if (usable && addr == this->arm_state_address_) {
         this->handle_arm_data_(pkt);
+        this->poll_ = Poll::SEND_ALARM;
+      } else if (usable && addr == this->alarm_state_address_) {
+        this->handle_alarm_data_(pkt);
         this->poll_ = Poll::IDLE;
         this->last_poll_ = millis();
       } else {
@@ -135,6 +141,8 @@ void TexecomComponent::process_packet_(const std::vector<uint8_t> &pkt) {
         if (this->poll_ == Poll::ZONES) {
           this->poll_ = Poll::SEND_ARM;
         } else if (this->poll_ == Poll::ARM) {
+          this->poll_ = Poll::SEND_ALARM;
+        } else if (this->poll_ == Poll::ALARM) {
           this->poll_ = Poll::IDLE;
           this->last_poll_ = millis();
         }
@@ -177,13 +185,25 @@ void TexecomComponent::handle_arm_data_(const std::vector<uint8_t> &pkt) {
   // bits, so mask the heartbeat off - comparing the raw byte made the panel
   // flap armed<->disarmed every second.
   const uint8_t masked = pkt[6] & 0x7F;
-  bool armed = masked != (this->disarmed_value_ & 0x7F);
-  ESP_LOGV(TAG, "Arm byte=0x%02X (masked 0x%02X) -> %s", pkt[6], masked, armed ? "armed" : "disarmed");
+  this->armed_current_ = masked != (this->disarmed_value_ & 0x7F);
+  ESP_LOGV(TAG, "Arm byte=0x%02X (masked 0x%02X) -> %s", pkt[6], masked,
+           this->armed_current_ ? "armed" : "disarmed");
   if (this->armed_sensor_ != nullptr)
-    this->armed_sensor_->publish_state(armed);
-  if (this->alarm_panel_ != nullptr)
-    this->alarm_panel_->publish_state(armed ? alarm_control_panel::ACP_STATE_ARMED_AWAY
-                                            : alarm_control_panel::ACP_STATE_DISARMED);
+    this->armed_sensor_->publish_state(this->armed_current_);
+  // The alarm_control_panel state is published by handle_alarm_data_ once the
+  // live "in alarm" flag has also been read, so it can report TRIGGERED.
+}
+
+void TexecomComponent::handle_alarm_data_(const std::vector<uint8_t> &pkt) {
+  if (pkt.size() < 7 || pkt[1] == CMD_NAK || this->alarm_panel_ == nullptr)
+    return;
+  const bool in_alarm = pkt[6] == this->alarm_active_value_;
+  auto state = alarm_control_panel::ACP_STATE_DISARMED;
+  if (this->armed_current_ && in_alarm)
+    state = alarm_control_panel::ACP_STATE_TRIGGERED;
+  else if (this->armed_current_)
+    state = alarm_control_panel::ACP_STATE_ARMED_AWAY;
+  this->alarm_panel_->publish_state(state);
 }
 
 void TexecomComponent::queue_action_(uint8_t command, uint8_t area) {

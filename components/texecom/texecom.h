@@ -30,6 +30,8 @@ class TexecomComponent : public Component, public uart::UARTDevice {
   void set_zone_count(uint8_t count) { this->zone_count_ = count; }
   void set_arm_state_address(uint32_t addr) { this->arm_state_address_ = addr; }
   void set_disarmed_value(uint8_t v) { this->disarmed_value_ = v; }
+  void set_alarm_state_address(uint32_t addr) { this->alarm_state_address_ = addr; }
+  void set_alarm_active_value(uint8_t v) { this->alarm_active_value_ = v; }
   void set_poll_interval(uint32_t ms) { this->poll_interval_ = ms; }
 
   void register_zone(TexecomZone *zone) { this->zones_.push_back(zone); }
@@ -43,7 +45,7 @@ class TexecomComponent : public Component, public uart::UARTDevice {
 
  protected:
   enum class State { INIT, HELLO_SENT, HELLO_ACKED, PASS_SENT, LOGGED_IN };
-  enum class Poll { IDLE, ZONES, SEND_ARM, ARM, ACTION };
+  enum class Poll { IDLE, ZONES, SEND_ARM, ARM, SEND_ALARM, ALARM, ACTION };
 
   void read_serial_();
   void process_packet_(const std::vector<uint8_t> &pkt);
@@ -51,6 +53,7 @@ class TexecomComponent : public Component, public uart::UARTDevice {
   void send_read_(uint32_t address, uint8_t size);
   void handle_zone_data_(const std::vector<uint8_t> &pkt);
   void handle_arm_data_(const std::vector<uint8_t> &pkt);
+  void handle_alarm_data_(const std::vector<uint8_t> &pkt);
   void queue_action_(uint8_t command, uint8_t area);
   std::vector<uint8_t> passcode_bytes_() const;
   static uint8_t checksum_(const std::vector<uint8_t> &bytes);
@@ -66,6 +69,9 @@ class TexecomComponent : public Component, public uart::UARTDevice {
   uint8_t zone_count_{16};
   uint32_t arm_state_address_{0x0000E4};
   uint8_t disarmed_value_{0xE0};
+  uint32_t alarm_state_address_{0x000558};
+  uint8_t alarm_active_value_{0xFF};
+  bool armed_current_{false};
   uint32_t poll_interval_{1000};
 
   std::vector<uint8_t> rx_buffer_;
