@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -17,7 +18,8 @@ class TexecomAlarmPanel;
 // Talks the Texecom Wintex/UDL protocol to a Premier 412 (International) over
 // its COM port set to "PC-Com". Two non-obvious things for this firmware:
 //  - the UDL passcode is sent as RAW DIGIT VALUES ("1234" -> 01 02 03 04);
-//  - arm/disarm are short commands 'A'(0x41)/'D'(0x44) + area number.
+//  - arm/reset/disarm are short commands 'A'(0x41)/'C'(0x43)/'D'(0x44) + an
+//    area bitmask (area 1 = 0x01, area 2 = 0x02, area 3 = 0x04, ...).
 class TexecomComponent : public Component, public uart::UARTDevice {
  public:
   void setup() override;
@@ -40,8 +42,8 @@ class TexecomComponent : public Component, public uart::UARTDevice {
   void set_alarm_panel(TexecomAlarmPanel *p) { this->alarm_panel_ = p; }
 
   // Called by the alarm_control_panel platform.
-  void arm_area(uint8_t area) { this->queue_action_(0x41, area); }
-  void disarm_area(uint8_t area) { this->queue_action_(0x44, area); }
+  void arm_area(uint8_t area);
+  void disarm_area(uint8_t area);
 
  protected:
   enum class State { INIT, HELLO_SENT, HELLO_ACKED, PASS_SENT, LOGGED_IN };
@@ -55,6 +57,7 @@ class TexecomComponent : public Component, public uart::UARTDevice {
   void handle_arm_data_(const std::vector<uint8_t> &pkt);
   void handle_alarm_data_(const std::vector<uint8_t> &pkt);
   void queue_action_(uint8_t command, uint8_t area);
+  static uint8_t area_mask_(uint8_t area) { return (uint8_t) (1u << (area - 1)); }
   std::vector<uint8_t> passcode_bytes_() const;
   static uint8_t checksum_(const std::vector<uint8_t> &bytes);
   static std::string to_hex_(const std::vector<uint8_t> &bytes);
@@ -78,9 +81,11 @@ class TexecomComponent : public Component, public uart::UARTDevice {
   State state_{State::INIT};
   Poll poll_{Poll::IDLE};
   bool awaiting_response_{false};
-  bool have_action_{false};
-  uint8_t action_command_{0};
-  uint8_t action_area_{1};
+  struct Action {
+    uint8_t command;
+    uint8_t area_mask;
+  };
+  std::deque<Action> actions_;
   uint32_t last_tx_{0};
   uint32_t last_poll_{0};
   uint32_t command_delay_{120};
