@@ -28,7 +28,7 @@ Wintex/UDL protocol directly over the COM port.
 |---|---|
 | Zones | live `binary_sensor` per zone |
 | Arm state | reflected in the `alarm_control_panel` (and updates when armed at a keypad) |
-| Arm / disarm | Arm Away and Disarm from Home Assistant, per area |
+| Arm / disarm | Arm Away and Disarm from Home Assistant, per area (arming also clears a latched alarm) |
 | Connection | direct serial, or over WiFi via the optional [ESP bridge](texecom-bridge.yaml) |
 
 ## Hardware

@@ -9,7 +9,12 @@ static const char *const TAG = "texecom";
 
 static const uint8_t CMD_LOGIN = 0x5A;          // 'Z'
 static const uint8_t CMD_READ_VOLATILE = 0x52;  // 'R'  live/RAM read
+static const uint8_t CMD_ARM = 0x41;            // 'A'
+static const uint8_t CMD_RESET = 0x43;          // 'C'
+static const uint8_t CMD_DISARM = 0x44;         // 'D'
 static const uint8_t CMD_NAK = 0x0F;
+
+static const uint8_t ZONE_ACTIVE = 0x01;  // other bits: 0x02 tamper, 0x10 alarmed (latched), 0x40 auto-bypassed
 
 void TexecomComponent::setup() {
   this->state_ = State::INIT;
@@ -42,10 +47,11 @@ void TexecomComponent::loop() {
       this->state_ = State::PASS_SENT;
       break;
     case State::LOGGED_IN:
-      if (this->poll_ == Poll::IDLE && this->have_action_) {
-        // arm/disarm takes priority over the status poll
-        ESP_LOGD(TAG, "Sending action cmd=0x%02X area=%u", this->action_command_, this->action_area_);
-        this->send_command_(this->action_command_, {this->action_area_});
+      if (this->poll_ == Poll::IDLE && !this->actions_.empty()) {
+        // arm/reset/disarm take priority over the status poll
+        const Action &action = this->actions_.front();
+        ESP_LOGD(TAG, "Sending action cmd=0x%02X areas=0x%02X", action.command, action.area_mask);
+        this->send_command_(action.command, {action.area_mask});
         this->poll_ = Poll::ACTION;
       } else if (this->poll_ == Poll::IDLE && now - this->last_poll_ >= this->poll_interval_) {
         this->send_read_(this->zone_status_address_, this->zone_count_);
@@ -110,11 +116,13 @@ void TexecomComponent::process_packet_(const std::vector<uint8_t> &pkt) {
       break;
     case State::LOGGED_IN: {
       if (this->poll_ == Poll::ACTION) {
-        // arm/disarm command was acknowledged; re-poll immediately to reflect it
+        // Action acknowledged; send the next queued one, then re-poll to reflect it.
         ESP_LOGV(TAG, "Action reply: %s", to_hex_(pkt).c_str());
-        this->have_action_ = false;
+        if (!this->actions_.empty())
+          this->actions_.pop_front();
         this->poll_ = Poll::IDLE;
-        this->last_poll_ = 0;
+        if (this->actions_.empty())
+          this->last_poll_ = 0;
         break;
       }
       // Dispatch strictly by the address the panel echoes back, not by poll
@@ -164,7 +172,10 @@ void TexecomComponent::handle_zone_data_(const std::vector<uint8_t> &pkt) {
   for (auto *z : this->zones_) {
     uint8_t idx = z->get_zone_number() - 1;
     if (idx < count) {
-      bool active = data[idx] != 0x00;  // 0x00 secure, 0x01 active
+      // Only bit 0 is "open". After an alarm the panel also latches 0x10 on the
+      // zones that triggered; reading any non-zero byte as open left them stuck
+      // "open" (and Ready to Arm false) until the panel was reset.
+      bool active = (data[idx] & ZONE_ACTIVE) != 0;
       z->publish_state(active);
       if (active)
         all_secure = false;
@@ -206,10 +217,18 @@ void TexecomComponent::handle_alarm_data_(const std::vector<uint8_t> &pkt) {
   this->alarm_panel_->publish_state(state);
 }
 
+void TexecomComponent::arm_area(uint8_t area) {
+  // After an alarm the area stays latched as "reset required": the panel ACKs
+  // 'A' but silently doesn't arm (an RF fob works because it arms as a user,
+  // which resets first). Reset should be a no-op on a clean area, so always send it.
+  this->queue_action_(CMD_RESET, area);
+  this->queue_action_(CMD_ARM, area);
+}
+
+void TexecomComponent::disarm_area(uint8_t area) { this->queue_action_(CMD_DISARM, area); }
+
 void TexecomComponent::queue_action_(uint8_t command, uint8_t area) {
-  this->action_command_ = command;
-  this->action_area_ = area;
-  this->have_action_ = true;
+  this->actions_.push_back({command, area_mask_(area)});
 }
 
 void TexecomAlarmPanel::control(const alarm_control_panel::AlarmControlPanelCall &call) {

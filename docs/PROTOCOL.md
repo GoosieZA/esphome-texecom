@@ -38,8 +38,11 @@ Example — the login "hello": `03 5A A2` (`0x03 + 0x5A = 0x5D`, `0xFF - 0x5D = 
 | `0x49` | `I` | ← panel | Reply to a config read; also **write** config |
 | `0x52` | `R` | → panel | Read **volatile** (live RAM) memory |
 | `0x57` | `W` | ← panel / → panel | Reply to a volatile read; also **write** volatile |
-| `0x41` | `A` | → panel | **Arm** an area |
-| `0x44` | `D` | → panel | **Disarm** an area |
+| `0x41` | `A` | → panel | **Arm** areas (full / away) |
+| `0x43` | `C` | → panel | **Reset** areas (clear a latched alarm) |
+| `0x44` | `D` | → panel | **Disarm** areas |
+| `0x53` | `S` | → panel | Part arm areas (from ESPHome_Wintex; untested here) |
+| `0x4B` | `K` | → panel | Keypad keypress (untested here) |
 | `0x06` | | ← panel | ACK (generic acknowledgement) |
 | `0x0F` | | ← panel | NAK (rejected / not authorised) |
 
@@ -80,7 +83,7 @@ command byte is not the `0x0F` NAK.
 | Space | Address | Size | Contents |
 |-------|---------|------|----------|
 | config | `0x000000` | 16 bytes/zone | Zone **names** (zone 1 at `0x0000`, zone 2 at `0x0010`, …) |
-| volatile | `0x0004F8` | 1 byte/zone | Live **zone status**: `0x00` secure, `0x01` active/open |
+| volatile | `0x0004F8` | 1 byte/zone | Live **zone status**, a bit field: `0x01` active/open, `0x02` tamper, `0x10` alarmed (latched until reset), `0x40` auto-bypassed |
 | volatile | `0x0000E4` | 1 byte | **Arm state** (see heartbeat note): `0xE0`/`0x60` disarmed, `0x40` armed |
 | volatile | `0x000558` | 1 byte | **Alarm active**: `0xFF` while triggered, `0x00` otherwise |
 | volatile | `0x0005EC` | 1 byte | bit 6 (`0x40`) = **"an alarm occurred"** memory (does *not* block arming) |
@@ -99,22 +102,28 @@ an exact `== 0xE0` test makes the state flap disarmed↔armed once per second.
 disarm (alarm memory) and only resets to `0x00` on the next arm, so gate it on the
 arm state or a stale alarm will show as triggered while re-armed. A separate
 "an alarm occurred since last arm" memory bit is `0x0005EC` bit 6 (`0x40`); it is set
-by an alarm and cleared at the keypad, but **does not block arming** — the panel
-re-arms fine with it set (the one-off "won't arm after an alarm" was an unsealed
-zone / partial reset during that incident, not this bit).
+by an alarm and cleared at the keypad. That bit on its own does not block arming,
+but the area's "reset required" latch does: see the reset note below.
 
-## Arm / disarm
+## Arm / reset / disarm
 
-Short commands with the **area number** as the single payload byte (1-based):
+Short commands with an **area bitmask** as the single payload byte (area 1 =
+`0x01`, area 2 = `0x02`, area 3 = `0x04`, area 4 = `0x08`):
 
 ```
-Arm area 1     →  04 41 01 <cksum>     ('A' + area)
-Disarm area 1  →  04 44 01 <cksum>     ('D' + area)
+Arm area 1     →  04 41 01 <cksum>     ('A' + areas)
+Reset area 1   →  04 43 01 <cksum>     ('C' + areas)
+Disarm area 1  →  04 44 01 <cksum>     ('D' + areas)
 ```
 
 The panel ACKs (`03 06 F6`) and the arm-state byte at `0x0000E4` changes
 accordingly. No user code is needed — the UDL login already authenticated the
 session.
+
+**After an alarm, reset before arming.** Once an area has alarmed it stays
+latched as "reset required": disarm works, but `A` is ACKed and silently
+ignored until the area is reset. An RF fob still arms because it arms as a user,
+which resets first. The component therefore always sends `C` then `A`.
 
 ## Writing memory
 
@@ -153,7 +162,13 @@ disturb the panel.
   mean the command did anything. Verify by reading state back. (Arm/disarm both
   ACK identically; watch `0x0000E4` to confirm the arm actually took — and note
   the panel won't arm while a zone is unsealed or a previous alarm is latched, so
-  a clean/ready panel is required.)
+  a clean/ready panel is required. A latched alarm is cleared with the `C`
+  reset command.)
+- **Zone status is a bit field, not a boolean.** Test bit 0 for "open"; the
+  alarmed bit (`0x10`) stays set after an alarm, so a non-zero test reports the
+  triggered zones as open until the panel is reset.
+- **Areas are a bitmask in arm/reset/disarm.** Sending the raw area number only
+  works for area 1 (area 3 as `0x03` means areas 1 *and* 2).
 - **The arm-state byte's bit 7 is a heartbeat.** Mask it off (`& 0x7F`) before
   comparing, or the reported state flaps disarmed↔armed every poll. Reads should
   also be matched to the address the panel echoes back, not just to poll order —
